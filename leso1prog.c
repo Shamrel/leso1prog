@@ -24,17 +24,18 @@ the source code.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <signal.h>
+#include <string.h>
 #include <errno.h>
 #include <err.h>
-#include <string.h>
+
 #include <termios.h>
-#include <sys/ioctl.h>
-#include <signal.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
 
 #define PROGNAME "leso1prog"
 #define VERSION "v0.1"
@@ -68,9 +69,9 @@ the source code.
  \brief  Сброс LESO1.
  */
 #define LESO1_RESET() 						\
-{		setDRT(globalArgs.sport_fd, 1); 	\
+{		setDTR(globalArgs.sport_fd, 1); 	\
 		usleep(30000);						\
-		setDRT(globalArgs.sport_fd, 0);}
+		setDTR(globalArgs.sport_fd, 0);}
 
 
 /**
@@ -103,7 +104,7 @@ struct globalArgs_t {
 
 
 
-void exit_handle(char *errmsg, char *msg )
+void exit_handler(char *errmsg, char *msg )
 {
 	if(errmsg != NULL) fprintf(stderr,"\033[1;31mERROR:\033[0m %s\n",errmsg);
 	if(msg != NULL) fprintf(stderr,"%s\n",msg);
@@ -122,26 +123,26 @@ void exit_handle(char *errmsg, char *msg )
 void term_handler(int i)
 {
 	printf ("\n\033[32mClose %s\033[0m\n", globalArgs.prog);
-	exit_handle(NULL, NULL);
+	exit_handler(NULL, NULL);
 }
 
 // прототипы функций
 int parse_hex_string (int8_t * str, hexfile_str_t *param);
 int createWPack(uint8_t *pack, hexfile_str_t *param);
-int createErasePack(uint8_t *pack, uint8_t tipe );
-int interrogate(uint8_t *pack );
+int createErasePack(uint8_t *pack, uint8_t tipe);
+int interrogate(uint8_t *pack);
 int check_hex_file(FILE *file);
 uint8_t checksum(uint8_t *data);
-int setRTS(int sport_fd,int State);
-int setDRT(int sport_fd,int State);
+int setRTS(int sport_fd, int State);
+int setDTR(int sport_fd, int State);
 
-#define usage(prog)	{printf("\n\033[1musage:\033[0m %s [-c] [-e] [-s siodev] [-x file.hex]\n", prog);}
+#define usage(prog)	{printf("\n\033[1musage:\033[0m %s [-c|e|r] [-s siodev] [-x file.hex]\n", prog);}
 
 static const char *optString = "Vechs:x:r";
 
 int main(int argc, char **argv)
 {
-	uint8_t rx_buff[64], tx_buff[64],string_buff[256];
+	uint8_t rx_buff[64], tx_buff[64], string_buff[256];
 
 	struct termios tty_options;
 	int16_t n, i;
@@ -174,7 +175,7 @@ int main(int argc, char **argv)
 	       	if(optarg == NULL)
 	       	{
 	       		usage(globalArgs.prog);
-	       		exit_handle("Unknown siodev\n", NULL);
+	       		exit_handler("Unknown siodev\n", NULL);
 	       	}
 	    	globalArgs.siodevName = optarg;
 	    	if (access(globalArgs.siodevName, W_OK|R_OK|W_OK) != 0) 	// siodev не существует
@@ -187,7 +188,7 @@ int main(int argc, char **argv)
 	    	if(optarg == NULL)
 			{
 				usage(globalArgs.prog);
-				exit_handle("Unknown hex-file\n", NULL);
+				exit_handler("Unknown hex-file\n", NULL);
 			}
 	    	globalArgs.hexFileName = optarg;
 			if (access(globalArgs.hexFileName, R_OK|W_OK) != 0) 	// hex-файл не существует
@@ -211,7 +212,7 @@ int main(int argc, char **argv)
 
 	    case 'V':
 	    	printf("%s %s\n",PROGNAME, VERSION);
-	    	exit_handle(NULL,NULL);
+	    	exit_handler(NULL,NULL);
 	    	break;
 	    case '?':
 	    case 'h':
@@ -221,6 +222,7 @@ int main(int argc, char **argv)
 	    	fprintf(stderr," -s siodev      Serial device (e.g. /dev/ttyUSB0)\n");
 	    	fprintf(stderr," -x file.hex    Intel Hex standard file\n");
 	    	fprintf(stderr," -e             Perform a chip erase\n");
+			fprintf(stderr," -r             Perform a chip reset\n");
 	    	fprintf(stderr," -c             Perform check the hex-file\n");
 	    	fprintf(stderr," -h             Print this information\n");
 	    	fprintf(stderr," -V             Print version information and exit\n");
@@ -238,9 +240,9 @@ int main(int argc, char **argv)
 	if ((globalArgs.hexFileName != NULL))				// если имя файла существует
 	{
 		globalArgs.hex_fd = fopen(globalArgs.hexFileName,"r");						// открываем hex файл. только для чтения
-		if (globalArgs.hex_fd == NULL) exit_handle("open hex-file",NULL);
+		if (globalArgs.hex_fd == NULL) exit_handler("open hex-file",NULL);
 		total_num_string = check_hex_file(globalArgs.hex_fd);
-		if (total_num_string<=0) exit_handle("bad hex-filename!",NULL);
+		if (total_num_string<=0) exit_handler("bad hex-filename!",NULL);
 		if (globalArgs.onlyCheckHex)
 		{
 
@@ -250,7 +252,7 @@ int main(int argc, char **argv)
 		}
 
 	}else if (globalArgs.onlyCheckHex)
-		exit_handle("not specified hex-filename!",
+		exit_handler("hex-filename not specified!",
 			"\033[1musage:\033[0m -v -x file.hex\n");
 
 	// к этому моменту мы завершили все действия, возможные без последовательного порта
@@ -258,11 +260,11 @@ int main(int argc, char **argv)
 	if (globalArgs.siodevName != NULL )
 		globalArgs.sport_fd = open (globalArgs.siodevName, O_RDWR | O_NOCTTY | O_NONBLOCK);
 //		globalArgs.sport_fd = open (globalArgs.siodevName, O_RDWR | O_NOCTTY );
-		else exit_handle("bad serial device name", NULL);
+		else exit_handler("bad serial device name", NULL);
 	if (globalArgs.sport_fd < 0)
 	{
 		perror("open");
-		exit_handle("open serial", NULL);
+		exit_handler("open serial", NULL);
 	}
 
 	// Настраиваем порт
@@ -285,7 +287,7 @@ int main(int argc, char **argv)
 	{
 		LESO1_RUN();
 		LESO1_RESET();
-		exit_handle(NULL, "\033[1mADuC reset\033[0m");
+		exit_handler(NULL, "\033[1mADuC reset\033[0m");
 	}
 	// переходим к загрузке hex-файла
 
@@ -294,9 +296,7 @@ int main(int argc, char **argv)
 	// а для этого должен быть успешно открыт и проверен hex-файл.
 	// Если файл УЖЕ открыт, то он УЖЕ проверен, иначе программа бы завершилась.
 	if((globalArgs.onlyErase == 0)&&(globalArgs.hex_fd == NULL))
-		exit_handle("Unknown hex-file", NULL);
-
-
+		exit_handler("Unknown hex-file", NULL);
 
 	FD_ZERO(&input);		// Настраиваем набор дескрипторов для работы select
 	FD_SET(globalArgs.sport_fd, &input);
@@ -312,13 +312,13 @@ int main(int argc, char **argv)
 		timeout.tv_sec =1;
 		timeout.tv_usec = 0;
 		ret = select(globalArgs.sport_fd+1, &input, NULL, NULL, &timeout);
-		if (ret < 0) { perror("select failed"); exit_handle("system error", NULL);}
-		else if (ret == 0) exit_handle("ADuC doesn't respond", "error start bootloader");
+		if (ret < 0) { perror("select failed"); exit_handler("system error", NULL);}
+		else if (ret == 0) exit_handler("ADuC doesn't respond", "error starting bootloader");
 		else if ((ret = read(globalArgs.sport_fd, &rx_buff[ptr], 25)) > 0)
 				ptr += ret;
 	}
 	rx_buff[14]='\0';					// после 14-го байта идут непечатные символы
-	printf("Reply loader: %s \n", rx_buff);
+	printf("Loader reply : %s \n", rx_buff);
 
 	memset(rx_buff, 0, sizeof(rx_buff));
 	ret = createErasePack(tx_buff, 0);		// создаем пакет для стирания памяти
@@ -332,17 +332,17 @@ int main(int argc, char **argv)
 	timeout.tv_usec = 0;
 
 	ret = select(globalArgs.sport_fd+1, &input, NULL, NULL, &timeout);	// ждем отклик
-	if (ret < 0) { perror("select failed"); exit_handle("system error", NULL);}
-	else if (ret == 0) exit_handle("ADuC doesn't respond", "error erase chip");
+	if (ret < 0) { perror("select failed"); exit_handler("system error", NULL);}
+	else if (ret == 0) exit_handler("ADuC doesn't respond", "error erase chip");
 	else if ((ret = read(globalArgs.sport_fd, &rx_buff[0], 25)) > 0)
 		{
 			PRINTF("2 rx_buff[0] = 0x%02x (%c), ret = %d \n", rx_buff[0], rx_buff[0], ret);
-			if (rx_buff[0] == ACK) printf("Memory is cleared \n");
-			else exit_handle("erasing the memory is fail \n",NULL);
+			if (rx_buff[0] == ACK) printf("Program flash memory cleared\n");
+			else exit_handler("memory erasing FAILED \n",NULL);
 		}
-	if(globalArgs.onlyErase) exit_handle(NULL,NULL);	// если требовалась только стереть память, то завершаем программу
+	if(globalArgs.onlyErase) exit_handler(NULL,NULL);	// если требовалась только стереть память, то завершаем программу
 
-	if(globalArgs.hex_fd == NULL) exit_handle("Unknown hex-file", "NULL");
+	if(globalArgs.hex_fd == NULL) exit_handler("Unknown hex-file", "NULL");
 	uint16_t str_count = 0;
 	fseek(globalArgs.hex_fd, 0, SEEK_SET);								// устанавливаем указатель на начало файла
 	printf("\n");
@@ -350,7 +350,7 @@ int main(int argc, char **argv)
 	{																	// считываем строки пока файл не закончится
 		if (parse_hex_string(string_buff, &param))						// поочередно работаем с каждой строкой
 		{															    // парсим строку, выделяем адреса, явки, пароли.
-			exit_handle("bad hex-file", NULL);							// в файле ошибка, продложать смысла нет.
+			exit_handler("bad hex-file", NULL);							// в файле ошибка, продложать смысла нет.
 		}
 		if (param.type) // последня строка hex-файла, заврешаем прошивку
 			break;
@@ -376,15 +376,15 @@ int main(int argc, char **argv)
 		timeout.tv_sec =0;
 		timeout.tv_usec = 100000;										// таймаут 100 мс.
 		ret = select(globalArgs.sport_fd+1, &input, NULL, NULL, &timeout);	// ждем отклик
-		if (ret < 0) { perror("select failed"); exit_handle("system error", NULL);}
-		else if (ret == 0) exit_handle("ADuC doesn't respond", "error download hex");
+		if (ret < 0) { perror("select failed"); exit_handler("system error", NULL);}
+		else if (ret == 0) exit_handler("ADuC doesn't respond", "error download hex");
 		else if ((ret = read(globalArgs.sport_fd, &rx_buff[0], 1)) > 0)
-				if (rx_buff[0] == NAK)  exit_handle("download hex is fail\n",NULL);
+				if (rx_buff[0] == NAK)  exit_handler("Hex-string rejected by ADuC\n",NULL);
 	}
 
 	LESO1_RUN();		// запускаем контроллер
 	LESO1_RESET();
-	exit_handle(NULL,"\033[1F100%\n\033[1mFlashing completed\033[0m\n");
+	exit_handler(NULL,"\033[1F100%\n\033[1mFlashing complete\033[0m\n");
 
 	return 0;
 }
@@ -541,7 +541,6 @@ int setRTS(int sport_fd,int State)
             perror("TIOCMGET failed");
             return -1;
       }
-
     if (State)  // set bit
     {
         status |= TIOCM_RTS;
@@ -551,7 +550,6 @@ int setRTS(int sport_fd,int State)
             perror("TIOCMSET failed ");
             return -1;
         }
-
     }
     else // clear bit
     {
@@ -562,46 +560,38 @@ int setRTS(int sport_fd,int State)
             perror("TIOCMSET failed ");
             return -1;
         }
-
     }
-
     return 0;
 }
 
-
-int setDRT(int sport_fd,int State)
+int setDTR(int sport_fd,int State)
 {
-    int status; // current status
+	int status; // current status
 
-      if (ioctl (sport_fd, TIOCMGET, &status) == -1)
-      {
-            perror("TIOCMGET failed ");
-            return -1;
-      }
-
-
-    if (State)  // set bit
-    {
-        status |= TIOCM_DTR;
-        PRINTF("Set DTR 1\n");
-        if (ioctl (sport_fd, TIOCMSET, &status) == -1)
-        {
-            perror("TIOCMSET failed ");
-            return -1;
-        }
-
-    }
-    else // clear bit
-    {
-        status &= ~TIOCM_DTR;
-        PRINTF("Set DTR 0\n");
-        if (ioctl (sport_fd, TIOCMSET, &status) == -1)
-        {
-            perror("TIOCMSET failed ");
-            return -1;
-        }
-
-    }
-
-    return 0;
+	if (ioctl (sport_fd, TIOCMGET, &status) == -1)
+	{
+		perror("TIOCMGET failed ");
+		return -1;
+	}
+	if (State)  // set bit
+	{
+		status |= TIOCM_DTR;
+		PRINTF("Set DTR 1\n");
+		if (ioctl (sport_fd, TIOCMSET, &status) == -1)
+		{
+			perror("TIOCMSET failed ");
+			return -1;
+		}
+	}
+	else // clear bit
+	{
+		status &= ~TIOCM_DTR;
+		PRINTF("Set DTR 0\n");
+		if (ioctl (sport_fd, TIOCMSET, &status) == -1)
+		{
+			perror("TIOCMSET failed ");
+			return -1;
+		}
+	}
+	return 0;
 }
