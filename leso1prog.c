@@ -272,7 +272,15 @@ int main(int argc, char **argv)
 	if(tcgetattr(globalArgs.sport_fd, &tty_options) == -1) perror("tcgetattr: "); 	// считываем текущие параметры
 	cfsetispeed(&tty_options, B9600); 												// скорость на прием
 	cfsetospeed(&tty_options, B9600); 												// скорость на передачу
-	tty_options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG | ECHOCTL | ECHOKE);
+	//tty_options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG | ECHOCTL | ECHOKE);
+	tty_options.c_iflag = 0;
+	tty_options.c_lflag = 0;
+	//tty_options.c_cflag = 0;
+	tty_options.c_oflag = 0;
+
+//	printf("c_lflag = 0x%x\n",tty_options.c_lflag );
+//	printf("c_cflag = 0x%x\n",tty_options.c_cflag );
+//	exit_handler(NULL,NULL);
 
 	tty_options.c_cflag &= ~CSIZE; 													// Маскирование битов размера символов
 	tty_options.c_cflag &= ~PARENB;
@@ -306,7 +314,7 @@ int main(int argc, char **argv)
 	memset(rx_buff, 0, sizeof(rx_buff));
 	LESO1_PROG();			// Запуск бутлоадера
 	LESO1_RESET();
-
+	LESO1_RUN();
 	while(ptr < 25)			// Принимаем 14 байт описания
 	{
 		timeout.tv_sec =1;
@@ -321,9 +329,9 @@ int main(int argc, char **argv)
 	printf("Loader reply : %s \n", rx_buff);
 
 	memset(rx_buff, 0, sizeof(rx_buff));
-	ret = createErasePack(tx_buff, 0);		// создаем пакет для стирания памяти
+	ret = createErasePack(tx_buff, 1);		// создаем пакет для стирания памяти
 #if DEBUG
-	printf("Create erasy tx-package:\n")
+	printf("Create erasy tx-package:\n");
 	for(i=0; i < ret ; i++) printf("0x%02hhx ",tx_buff[i]); printf("\n");
 #endif
 	write(globalArgs.sport_fd, tx_buff, ret );
@@ -336,7 +344,7 @@ int main(int argc, char **argv)
 	else if (ret == 0) exit_handler("ADuC doesn't respond", "error erase chip");
 	else if ((ret = read(globalArgs.sport_fd, &rx_buff[0], 25)) > 0)
 		{
-			PRINTF("2 rx_buff[0] = 0x%02x (%c), ret = %d \n", rx_buff[0], rx_buff[0], ret);
+			PRINTF("resp = %#02hhx\r\n", rx_buff[0]);
 			if (rx_buff[0] == ACK) printf("Program flash memory cleared\n");
 			else exit_handler("memory erasing FAILED \n",NULL);
 		}
@@ -356,8 +364,15 @@ int main(int argc, char **argv)
 			break;
 
 		ret = createWPack(tx_buff, &param);
-		str_count++;
-	//Анимация прогресса
+
+#if DEBUG
+	printf("Str %u, pack to send[%u]:\r\n", str_count, ret);
+	for(i=0; i < ret ; i++) printf("%02hhx ",tx_buff[i]); printf("\n");
+#endif
+
+	str_count++;
+#if !DEBUG
+		//Анимация прогресса
 		char c;
 		switch (3&(str_count>>3)){
 		case 0: c = '|'; break;
@@ -370,7 +385,7 @@ int main(int argc, char **argv)
 		//printf("%c%u%%\033[1F\n",c, (str_count*100/total_num_string));
 
 		printf("\033[1F%c%u%%\n",c, (str_count*100/total_num_string));
-
+#endif
 
 		write(globalArgs.sport_fd,tx_buff,ret );						// посылаем пакет микроконтроллеру
 		timeout.tv_sec =0;
@@ -379,7 +394,12 @@ int main(int argc, char **argv)
 		if (ret < 0) { perror("select failed"); exit_handler("system error", NULL);}
 		else if (ret == 0) exit_handler("ADuC doesn't respond", "error download hex");
 		else if ((ret = read(globalArgs.sport_fd, &rx_buff[0], 1)) > 0)
-				if (rx_buff[0] == NAK)  exit_handler("Hex-string rejected by ADuC\n",NULL);
+		{
+			#if DEBUG
+				printf("resp = %#02hhx\r\n", rx_buff[0]);
+			#endif
+			if (rx_buff[0] == NAK)  exit_handler("Hex-string rejected by ADuC\n",NULL);
+		}
 	}
 
 	LESO1_RUN();		// запускаем контроллер
@@ -426,7 +446,7 @@ int parse_hex_string (int8_t * str, hexfile_str_t *param)
 		crc += param->data[i];
 	}
 	sscanf(str, "%02hhx", &param->crc);			// считываем контрольную сумму
-	PRINTF("crc = 0x%02hhx   0x%02x\n",crc, param->crc);
+	//PRINTF("crc = 0x%02hhx   0x%02x\n",crc, param->crc);
 
 	if ( 0xFF&(param->crc+crc) ) return (-2);	// если расчитанная сумма не совпала с записанной в конце строки,
 												// то возвращаем ошибку
